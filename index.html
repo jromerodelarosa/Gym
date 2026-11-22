@@ -1585,22 +1585,9 @@ const ACT = {
     dset(c.sid, c.exId, c.n, 'rir', v);
   },
   saveSet: async (el) => {
-    const c = rowCtx(el); const s = get(c.sid); const item = itemOf(c.sid, c.exId);
-    const wRaw = c.row.querySelector('.in-w').value; const w = wRaw.trim() === '' ? 0 : num(wRaw);
-    const r = parseInt(c.row.querySelector('.in-r').value, 10);
-    if (!Number.isFinite(w) || w < 0) { toast('Peso no válido', { type: 'err' }); return; }
-    if (!(r > 0)) { toast('Indica las repeticiones', { type: 'err' }); return; }
-    const onRir = c.row.querySelector('.rir button.on'); const rir = onRir && onRir.dataset.v !== '' ? +onRir.dataset.v : null;
-    const existing = setsOf(c.sid, c.exId).find((x) => x.data.n === c.n);
-    const id = existing ? existing.id : uuid();
-    const prev = await save('set', id, { sessionId: c.sid, exId: c.exId, n: c.n, w, r, rir, at: existing ? existing.data.at : Date.now() }, { deleted_at: null });
-    dclear(c.sid, c.exId, c.n); delete ui.open[c.sid + '|' + c.exId];
-    try { if (prefs().vibrate && navigator.vibrate) navigator.vibrate(30); } catch (e) { /* nada */ }
-    if (existing) undoToast(`Serie ${c.n} actualizada`, [prev], [id]);
-    else Timer.start(restFor(item), s.data.color);
-    const prs = checkPR(get(id), s);
-    ui.justSaved = id; App.render(); ui.justSaved = null;
-    if (prs.length) celebrate(prs);
+    if (ACT.saveSet.busy) return; // evita dobles toques
+    ACT.saveSet.busy = true; el.disabled = true;
+    try { await saveSetImpl(el); } finally { ACT.saveSet.busy = false; el.disabled = false; }
   },
   delSet: async (el) => {
     const id = el.dataset.id; const x = get(id);
@@ -1762,6 +1749,24 @@ async function snapPayload(src, id) {
     const { data, error } = await Sync.client.from('gym_backups').select('payload').eq('id', id).single();
     if (error) throw error; return data.payload;
   } catch (e) { toast('No se pudo leer la copia: ' + errMsg(e), { type: 'err' }); return null; }
+}
+async function saveSetImpl(el) {
+    const c = rowCtx(el); const s = get(c.sid); const item = itemOf(c.sid, c.exId);
+    const wRaw = c.row.querySelector('.in-w').value; const w = wRaw.trim() === '' ? 0 : num(wRaw);
+    const r = parseInt(c.row.querySelector('.in-r').value, 10);
+    if (!Number.isFinite(w) || w < 0) { toast('Peso no válido', { type: 'err' }); return; }
+    if (!(r > 0)) { toast('Indica las repeticiones', { type: 'err' }); return; }
+    const onRir = c.row.querySelector('.rir button.on'); const rir = onRir && onRir.dataset.v !== '' ? +onRir.dataset.v : null;
+    const existing = setsOf(c.sid, c.exId).find((x) => x.data.n === c.n);
+    const id = existing ? existing.id : uuid();
+    const prev = await save('set', id, { sessionId: c.sid, exId: c.exId, n: c.n, w, r, rir, at: existing ? existing.data.at : Date.now() }, { deleted_at: null });
+    dclear(c.sid, c.exId, c.n); delete ui.open[c.sid + '|' + c.exId];
+    try { if (prefs().vibrate && navigator.vibrate) navigator.vibrate(30); } catch (e) { /* nada */ }
+    if (existing) undoToast(`Serie ${c.n} actualizada`, [prev], [id]);
+    else Timer.start(restFor(item), s.data.color);
+    const prs = checkPR(get(id), s);
+    ui.justSaved = id; App.render(); ui.justSaved = null;
+    if (prs.length) celebrate(prs);
 }
 const celebrated = new Set();
 function checkPR(setRec, s) {
