@@ -1,7 +1,9 @@
 /* IronLog service worker: la app funciona sin conexión.
-   Estrategia: "stale-while-revalidate" (sirve la copia guardada al instante y actualiza en segundo plano).
-   Las llamadas a Supabase NUNCA se cachean. */
-const CACHE = 'ironlog-v1';
+   - La página (HTML): primero la red (sin caché HTTP) para tener siempre la última versión;
+     si no hay red o tarda más de 4 s, la copia guardada.
+   - Librerías, iconos y fuentes: copia guardada al instante y actualización en segundo plano.
+   - Supabase y Gemini NUNCA se cachean. */
+const CACHE = 'ironlog-v3';
 const CORE = [
   './',
   './index.html',
@@ -40,15 +42,34 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.hostname.endsWith('supabase.co') || url.hostname.endsWith('supabase.in')) return; // datos: siempre red
+  if (url.hostname.endsWith('supabase.co') || url.hostname.endsWith('supabase.in') || url.hostname.endsWith('googleapis.com') && url.hostname !== 'fonts.googleapis.com') return; // datos: siempre red
   const sameOrigin = url.origin === self.location.origin;
   const allowed = sameOrigin || ['cdn.jsdelivr.net', 'fonts.googleapis.com', 'fonts.gstatic.com'].includes(url.hostname);
   if (!allowed) return;
 
+  const isPage = req.mode === 'navigate' || (sameOrigin && /\/(index\.html)?$/.test(url.pathname));
+  if (isPage) {
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE);
+      const net = fetch(req, { cache: 'no-cache' }).then((res) => {
+        if (res && res.ok) cache.put('./index.html', res.clone()).catch(() => {});
+        return res;
+      });
+      const timeout = new Promise((r) => setTimeout(() => r(null), 4000));
+      try {
+        const res = await Promise.race([net, timeout]);
+        if (res && res.ok) return res;
+      } catch (e) { /* sin red */ }
+      const cached = await cache.match('./index.html');
+      if (cached) { event.waitUntil(net.catch(() => {})); return cached; }
+      try { return await net; } catch (e) { return new Response('Sin conexión', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }); }
+    })());
+    return;
+  }
   event.respondWith((async () => {
     const cache = await caches.open(CACHE);
-    const isNav = req.mode === 'navigate';
-    const cached = await cache.match(req, { ignoreSearch: sameOrigin }) || (isNav ? await cache.match('./index.html') : undefined);
+    const isNav = false;
+    const cached = await cache.match(req, { ignoreSearch: sameOrigin });
     const network = fetch(req).then((res) => {
       if (res && (res.ok || res.type === 'opaque')) cache.put(req, res.clone()).catch(() => {});
       return res;

@@ -485,7 +485,7 @@ input[type=range]{padding:0;min-height:0;height:34px;accent-color:var(--lime);ba
    4) Borrado lógico (deleted_at) → papelera
    5) Instantáneas diarias (local + nube) y export/import JSON
    ===================================================================== */
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '2.1.0';
 const LIBS = {
   supabase: 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js',
   chart: 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'
@@ -3038,7 +3038,17 @@ setInterval(() => Sync.soon(0), 60000);
   Sync.init();
   loadLib('chart');
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
-    navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW', e));
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
+      const check = () => reg.update().catch(() => {});
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
+      setInterval(check, 30 * 60 * 1000);
+    }).catch((e) => console.warn('SW', e));
+    // Hay versión nueva: aviso con botón (tus datos están a salvo; no se pierde nada al recargar).
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || window.__reloading) return;
+      toast('Nueva versión de IronLog instalada', { action: 'Recargar', ms: 60000, onAction: () => { window.__reloading = true; location.reload(); } });
+    });
   }
 })();
 </script>
