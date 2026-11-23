@@ -485,7 +485,7 @@ input[type=range]{padding:0;min-height:0;height:34px;accent-color:var(--lime);ba
    4) Borrado lógico (deleted_at) → papelera
    5) Instantáneas diarias (local + nube) y export/import JSON
    ===================================================================== */
-const APP_VERSION = '2.1.0';
+const APP_VERSION = '2.1.1';
 const LIBS = {
   supabase: 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js',
   chart: 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'
@@ -945,10 +945,11 @@ const Sync = {
       this.client = window.supabase.createClient(c.url.trim(), c.key.trim(), { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey: 'ironlog-auth' } });
     } catch (e) { this.lastError = 'Configuración no válida: ' + errMsg(e); Status.render(); return; }
     try { const { data } = await this.client.auth.getSession(); this.session = data.session; } catch (e) { console.warn(e); }
+    if (App.view === 'ajustes') App.render(); // la sesión se recupera después de pintar
     const { data: sub } = this.client.auth.onAuthStateChange((ev, session) => {
       this.session = session; Status.render();
       if (ev === 'SIGNED_IN' || ev === 'TOKEN_REFRESHED') this.soon(150);
-      if (App.view === 'ajustes' && (ev === 'SIGNED_IN' || ev === 'SIGNED_OUT')) App.render();
+      if (App.view === 'ajustes' && (ev === 'SIGNED_IN' || ev === 'SIGNED_OUT' || ev === 'INITIAL_SESSION')) App.render();
     });
     this.sub = sub.subscription;
     Status.render(); this.soon(200);
