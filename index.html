@@ -1244,6 +1244,7 @@ function exCardHtml(s, item, idx, mode) {
     ${mode === 'current' ? recCardHtml(r, item.exId) : mode === 'next' ? `<div class="recline"><span class="cdot ${coachDot(r)}" style="display:inline-block;vertical-align:middle;margin-right:6px"></span><b>${esc(r.label)}</b> · <span class="num">${esc(recMain(r))}</span></div>` : ''}
     ${mode === 'current' && last ? `<div class="last">Última vez (${fmtDate(last.s.data.date)}): <b class="num">${setsLine(last.sets)}</b></div>` : ''}
     ${mode === 'current' && last && (last.s.data.notes || {})[item.exId] ? `<div class="last">📝 Nota anterior: ${esc(last.s.data.notes[item.exId])}</div>` : ''}
+    ${mode === 'current' && item.group === 'core' && matchInfo() ? `<div class="last warn">🟨 ${matchInfo() === 'today' ? 'Hoy' : 'Mañana'} compites: core suave u omítelo (no al fallo).</div>` : ''}
     ${rows ? `<div class="sets">${rows}</div>` : ''}
     ${mode === 'next' ? '' : `<div class="ex-foot"><textarea data-in="note" data-sid="${s.id}" data-ex="${item.exId}" placeholder="Nota del ejercicio…" rows="1">${esc(note)}</textarea><button class="btn sm" data-act="addSet" data-sid="${s.id}" data-ex="${item.exId}">+ Serie</button></div>`}
     ${mode === 'done' ? `<div class="row" style="margin-top:10px"><button class="btn sm grow" data-act="reopenEx" data-sid="${s.id}" data-ex="${item.exId}">↩ Desmarcar (volver arriba)</button><button class="btn sm" data-act="toggleEx" data-key="${key}">Plegar</button></div>` : ''}
@@ -1262,6 +1263,7 @@ function viewSession(s) {
       <div class="prog"><i style="width:${Math.min(100, (100 * done) / Math.max(1, planned))}%"></i></div>
     </div>
     ${old ? `<div class="banner">Esta sesión es del ${fmtDateL(s.data.date)} y sigue abierta. Termínala para empezar otra.</div>` : ''}
+    ${matchBanner()}
     ${order.map((x) => exCardHtml(s, x.it, x.i, x === cur ? 'current' : 'next')).join('')}
     ${!active.length ? `<div class="card glow" style="--day:${s.data.color}"><h2 style="color:var(--day)">¡Todo completado! 💪</h2><p class="sub">Termina la sesión para ver tu resumen y responder 3 preguntas rápidas.</p></div>` : ''}
     ${fin.length ? `<div class="done-sec"><div class="done-h">Completados ✓ <span>${fin.length}/${plan.length}</span></div>${fin.map((x) => exCardHtml(s, x.it, x.i, 'done')).join('')}</div>` : ''}
@@ -1290,7 +1292,7 @@ function viewHoy() {
   if (weeklyDue()) nudges.push('Check-in semanal pendiente');
   const pend = byKind('proposal').filter((p) => p.data.status === 'pending').length; if (pend) nudges.push(`${pend} ${pend === 1 ? 'propuesta' : 'propuestas'} del coach por revisar`);
   const nudgeHtml = nudges.length ? `<div class="card" style="--day:var(--lime)"><div class="row"><div class="avatar sm">${AVATAR_SVG}</div><div class="grow"><div class="kicker">Coach</div><div class="sub">${nudges.map(esc).join(' · ')}</div></div><button class="btn sm" data-act="go" data-v="coach">Abrir</button></div></div>` : '';
-  return bannerS + bannerB + `
+  return bannerS + bannerB + matchBanner() + `
   <section class="card hero glow" style="--day:${day.data.color}">
     <div class="kicker">${day.id === (nd && nd.id) ? 'Hoy toca' : 'Has elegido'} · ${bw ? (bw.before ? `El bloque empieza en ${bw.inDays} ${bw.inDays === 1 ? 'día' : 'días'}` : bw.after ? 'Bloque completado' : `Semana ${bw.w} de ${bw.weeks}`) : ''}</div>
     <h1>Día ${day.data.num}</h1>
@@ -1869,6 +1871,8 @@ function computeGoal(a) {
     'Las medidas objetivo son estimaciones orientativas, no promesas. Las ajustaremos con tus medidas reales cada 2-4 semanas.',
     'V-taper: lo que más se nota es subir hombros/dorsales y mantener o bajar cintura (ratio hombros/cintura).'
   ];
+  if (+a.age && +a.age < 18) notes.unshift('Con menos de 18 años aún puedes estar creciendo: parte del peso ganado será crecimiento. Nada de déficits agresivos; prioriza técnica, progresión y comer suficiente.');
+  if (profile().health) notes.push('Tu contexto de salud manda sobre estas cifras: cualquier cambio de dieta, consúltalo con tu médico o nutricionista.');
   return { createdAt: Date.now(), approach: a.approach, horizon: +a.horizon, focus: a.focus, years, look: a.look,
     start: { date: dstr(), bw, ...Object.fromEntries(MKEYS.map(([k]) => [k, m0[k] ? +m0[k] : null])) },
     rates: { muscle: muscleM, bw: bwM }, targets, notes, aiText: '' };
@@ -2240,7 +2244,9 @@ REGLAS (obligatorias):
 5. Los cambios de rutina son PROPUESTAS: el usuario decide si los acepta; nunca digas que ya están aplicados.
 6. Objetivos realistas: usa ritmos de ganancia muscular acordes a sus años de entrenamiento; no prometas resultados imposibles.
 7. Al analizar fotos, deja claro que es una estimación visual, no una medición.
-8. Habla en español de España, directo y motivador, como un entrenador. Sé conciso: máximo unas 120 palabras salvo que te pidan detalle. Usa viñetas cortas cuando ayuden.`;
+8. Respeta SIEMPRE el contexto del perfil: condiciones de salud (prioridad absoluta: tolerancia, sin recortes agresivos, deriva al médico o nutricionista lo clínico), actividad fuera del gimnasio y días de partido/competición (nunca propongas cargas, fallo o core pesado que comprometan esos días ni el día anterior).
+9. Si el usuario es menor de 18 años, nada de déficits agresivos ni suplementación más allá de lo que ya use con supervisión.
+10. Habla en español de España, directo y claro, como un entrenador. Si el perfil indica un estilo ("Cómo quieres que te hable el coach"), síguelo por encima de esto. Sé conciso: máximo unas 120 palabras salvo que te pidan detalle. Usa viñetas cortas cuando ayuden.`;
 class AIError extends Error { constructor(code, msg) { super(msg); this.code = code; } }
 function hashStr(s) { let h1 = 0x811c9dc5, h2 = 0x1505; for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); h1 = Math.imul(h1 ^ c, 16777619); h2 = (h2 * 33) ^ c; } return (h1 >>> 0).toString(36) + (h2 >>> 0).toString(36) + s.length.toString(36); }
 function parseJSONLoose(t) {
@@ -2330,7 +2336,14 @@ const AI = {
 function buildSummary() {
   const L = []; const p = profile(); const today = dstr(); const bw = latestBw();
   L.push(`FECHA: ${today}`);
-  L.push(`PERFIL: edad ${p.age || '?'}; altura ${p.height || '?'} cm; peso ${bw != null ? fmt(bw, 1) : '?'} kg; entrena ${yearsTxt(p.years)}; objetivo: ${p.objective || '?'}; sueño ${p.sleep || '?'} h; días/semana ${p.days || '?'}; lesiones/molestias: ${p.injuries || 'ninguna indicada'}.`);
+  L.push(`HOY ES: ${WDAYS[new Date().getDay()]}${matchInfo() === 'today' ? ' (DÍA DE PARTIDO/COMPETICIÓN)' : matchInfo() === 'tomorrow' ? ' (MAÑANA HAY PARTIDO/COMPETICIÓN)' : ''}.`);
+  L.push(`PERFIL: edad ${p.age || '?'}; altura ${p.height || '?'} cm; peso ${bw != null ? fmt(bw, 1) : '?'} kg; entrena ${yearsTxt(p.years)}; objetivo: ${p.objective || '?'}; sueño ${p.sleep || '?'} h; días/semana ${p.days || '?'}; lesiones/molestias: ${p.injuries || 'ninguna indicada'}; días de partido: ${(p.matchDays || []).length ? WD_CHIPS.filter(([d]) => p.matchDays.map(Number).includes(d)).map(([, l]) => l).join(',') : 'ninguno'}.`);
+  const clip = (t, n) => { t = String(t || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n) + '…' : t; };
+  for (const [k, l, , isHealth] of CTX_FIELDS) {
+    if (!p[k]) continue;
+    if (isHealth && p.shareHealth === false) { L.push(`${l.toUpperCase()}: (el usuario ha elegido no compartirlo)`); continue; }
+    L.push(`${l.toUpperCase()}: ${clip(p[k], k === 'context' ? 1500 : 600)}`);
+  }
   const g = live('goal');
   if (g) { const t = g.data.targets.at(-1); L.push(`OBJETIVO FÍSICO: ${APPROACH[g.data.approach]}, ${g.data.horizon} meses desde ${g.data.start.date}; prioridad ${(g.data.focus || []).join(', ')}; meta orientativa: peso ${t.bw} kg, +${t.muscle} kg músculo${t.shoulders ? `, hombros ${t.shoulders} cm` : ''}${t.waist ? `, cintura ${t.waist} cm` : ''}.`); }
   else L.push('OBJETIVO FÍSICO: sin definir todavía.');
@@ -2425,18 +2438,51 @@ function viewCoach() {
       <div class="chips" style="margin-bottom:10px">${QUICK.map((q) => `<button class="chip sm" data-act="chatQuick" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
       <div class="chatbox"><textarea id="chatIn" placeholder="${key ? 'Escribe al coach…' : 'Activa Gemini en Ajustes para chatear'}" rows="1"></textarea><button class="btn primary" data-act="chatSend" ${ui.aiBusy || !key ? 'disabled' : ''}>Enviar</button></div></div>`;
 }
+const WD_CHIPS = [[1, 'L'], [2, 'M'], [3, 'X'], [4, 'J'], [5, 'V'], [6, 'S'], [0, 'D']];
+const CTX_FIELDS = [
+  ['health', 'Salud y condiciones médicas', 'Enfermedades, medicación, cosas que el coach debe respetar siempre', true],
+  ['activity', 'Actividad fuera del gimnasio', 'Deporte, trabajo físico, partidos, carrera…', false],
+  ['nutrition', 'Alimentación y suplementos', 'Qué comes bien, qué toleras mal, suplementos', true],
+  ['coachStyle', 'Cómo quieres que te hable el coach', 'p. ej. directo, sin relleno, cuestiona plazos irreales', false],
+  ['context', 'Contexto extra (informes, «radiografías»…)', 'Pega aquí cualquier informe largo. Mejor compactarlo para gastar menos tokens.', false]
+];
+/** Día de partido/competición hoy o mañana (según el perfil). */
+function matchInfo() {
+  const md = (profile().matchDays || []).map(Number); if (!md.length) return null;
+  const t = new Date().getDay();
+  if (md.includes(t)) return 'today';
+  if (md.includes((t + 1) % 7)) return 'tomorrow';
+  return null;
+}
+function matchBanner() {
+  const m = matchInfo(); if (!m) return '';
+  return m === 'today'
+    ? '<div class="banner">🟨 <span class="grow"><b>Hoy compites/arbitras.</b> Si entrenas, que sea suave: RIR 3+, nada al fallo y sin core pesado. Prioriza hidratos y electrolitos.</span></div>'
+    : '<div class="banner">🟨 <span class="grow"><b>Mañana compites/arbitras.</b> Deja 2-3 reps en reserva, evita el fallo y el core pesado (crunch, elevaciones) para llegar fresco y proteger las tibias.</span></div>';
+}
 function viewPerfil() {
-  const p = profile(); const bw = latestBw();
+  const p = profile(); const bw = latestBw(); const md = (p.matchDays || []).map(Number);
   const f = (k, l, mode = 'decimal', ph = '') => `<div><label class="f">${l}</label><input inputmode="${mode}" data-ch="prof" data-k="${k}" value="${esc(p[k] ?? '')}" placeholder="${ph}"></div>`;
+  const ctxLen = CTX_FIELDS.reduce((a, [k]) => a + String(p[k] || '').length, 0);
   return `<button class="btn sm" data-act="go" data-v="coach" style="margin-bottom:12px">‹ Coach</button>
     <div class="card glow" style="--day:var(--lime)">
-      <div class="coach-hd">${avatarHtml(true)}<div><h2>Perfil</h2><div class="hint">Todo lo que el coach sabe de ti (además de tus entrenos). Se sincroniza.</div></div></div>
+      <div class="coach-hd">${avatarHtml(true)}<div><h2>Perfil</h2><div class="hint">Todo lo que el coach sabe de ti (además de tus entrenos). Se guarda en el dispositivo y en tu Supabase privado.</div></div></div>
       <div class="grid2">${f('age', 'Edad (años)', 'numeric')}${f('height', 'Altura (cm)', 'numeric')}
         <div><label class="f">Peso (kg)</label><input inputmode="decimal" data-ch="profBw" value="${bw != null ? fmtIn(bw) : ''}" placeholder="kg"></div>${f('years', 'Años entrenando', 'decimal', 'p. ej. 2,5')}
         ${f('sleep', 'Horas de sueño', 'decimal')}${f('days', 'Días disponibles/sem', 'numeric')}</div>
       <label class="f">Objetivo</label><input data-ch="prof" data-k="objective" value="${esc(p.objective || '')}" placeholder="p. ej. físico atlético, V-taper">
       <label class="f">Lesiones o molestias</label><textarea data-ch="prof" data-k="injuries" placeholder="Ninguna">${esc(p.injuries || '')}</textarea>
-      <button class="btn sm" style="margin-top:12px" data-act="showCtx">👁 Ver exactamente lo que recibe el coach</button>
+      <label class="f">Días de partido / competición</label>
+      <div class="chips">${WD_CHIPS.map(([d, l]) => `<button class="chip ${md.includes(d) ? 'on' : ''}" data-act="profDay" data-d="${d}" style="min-width:44px">${l}</button>`).join('')}</div>
+      <p class="hint" style="margin-top:6px">El día anterior y el mismo día la app te avisa: nada al fallo, sin core pesado.</p>
+    </div>
+    <div class="card" style="--day:var(--blue)">
+      <div class="kicker">Contexto para el coach</div>
+      ${CTX_FIELDS.map(([k, l, ph, isHealth]) => `<label class="f">${l}${isHealth ? ' 🔒' : ''}</label><textarea data-ch="prof" data-k="${k}" placeholder="${esc(ph)}" style="${k === 'context' ? 'min-height:120px' : ''}">${esc(p[k] || '')}</textarea>`).join('')}
+      <p class="hint" style="margin-top:8px">Contexto: ${ctxLen} caracteres (~${Math.round(ctxLen / 4)} tokens por petición).${ctxLen > 1500 ? ' <span class="warn">Es largo: compáctalo para gastar menos.</span>' : ''}</p>
+      <div class="row wrap" style="margin-top:6px"><button class="btn sm" data-act="ctxCompact" ${AI.key() && String(p.context || '').length > 200 ? '' : 'disabled'}>🗜 Compactar «Contexto extra» con IA</button><button class="btn sm" data-act="showCtx">👁 Ver lo que recibe el coach</button></div>
+      <label class="toggle" style="margin-top:10px"><span>Enviar los campos 🔒 (salud y alimentación) al coach IA</span><input type="checkbox" ${p.shareHealth === false ? '' : 'checked'} data-ch="profShare"></label>
+      <p class="hint">En el plan gratuito de Gemini, Google puede usar lo que envías para mejorar sus productos (y revisarlo personas). Si lo desactivas, el coach no verá esos datos.</p>
     </div>
     ${goalCardHtml(live('goal'), true)}`;
 }
@@ -2635,6 +2681,20 @@ const ACT = {
   propAccept: async (el) => { await applyProposal(el.dataset.id); const m = Modal.stack.at(-1); if (m && m.isProposal) m.close(); },
   propReject: async (el) => { const p = get(el.dataset.id); await save('proposal', p.id, { ...p.data, status: 'rejected', decidedAt: Date.now() }); toast('Propuesta rechazada'); const m = Modal.stack.at(-1); if (m && m.isProposal) m.close(); App.render(); },
   onboard: () => startOnboarding(),
+  profDay: async (el) => {
+    const d = +el.dataset.d; const md = (profile().matchDays || []).map(Number);
+    await save('profile', 'profile', { ...profile(), matchDays: md.includes(d) ? md.filter((x) => x !== d) : [...md, d] }, { deleted_at: null }); App.render();
+  },
+  ctxCompact: async (el) => {
+    const src = String(profile().context || ''); el.disabled = true; el.textContent = 'Compactando…';
+    try {
+      const r = await AI.call({ parts: [{ text: `Compacta este texto en un máximo de 700 caracteres, en viñetas telegráficas en español. Conserva TODOS los datos médicos, restricciones, cifras, plazos y preferencias de trato. No añadas nada que no esté. Devuelve solo el texto.\n\n${src}` }], maxTokens: 500 });
+      const m = Modal.open(`<h2>Contexto compactado</h2><p class="hint">${src.length} → ${r.text.length} caracteres. Revísalo y edítalo antes de guardar.</p><textarea id="ctxOut" style="min-height:220px">${esc(r.text)}</textarea><div class="row" style="margin-top:12px"><button class="btn grow" data-close>Cancelar</button><button class="btn primary grow" id="ctxSave">Usar esta versión</button></div>`, { cls: 'wide' });
+      m.static = true;
+      m.body.querySelector('#ctxSave').onclick = async () => { const prev = await save('profile', 'profile', { ...profile(), context: m.body.querySelector('#ctxOut').value.trim(), contextOriginal: src }, { deleted_at: null }); m.close(); undoToast('Contexto compactado (el original queda guardado)', [prev], ['profile']); App.render(); };
+    } catch (e) { toast(e.message, { type: 'err', ms: 7000 }); }
+    el.disabled = false; el.textContent = '🗜 Compactar «Contexto extra» con IA';
+  },
   goalExplain: async (el) => {
     const g = live('goal'); if (!g) return; el.disabled = true; el.textContent = 'Pensando…';
     try {
@@ -2853,6 +2913,7 @@ const CH = {
     let v = el.value.trim(); if (numeric && v !== '') { v = num(v); if (!Number.isFinite(v) || v < 0) { toast('Valor no válido', { type: 'err' }); return; } }
     await save('profile', 'profile', { ...profile(), [k]: v }, { deleted_at: null }); toast('Perfil guardado ✓', { type: 'ok', ms: 1400 });
   },
+  profShare: async (el) => { await save('profile', 'profile', { ...profile(), shareHealth: el.checked }, { deleted_at: null }); toast(el.checked ? 'Salud y alimentación: se envían al coach IA' : 'Salud y alimentación: NO se envían al coach IA', { ms: 2500 }); },
   profBw: async (el) => { const kg = num(el.value); if (!(kg > 20 && kg < 400)) { toast('Peso no válido', { type: 'err' }); return; } await save('bw', 'bw-' + dstr(), { date: dstr(), kg }, { deleted_at: null }); toast('Peso guardado ✓', { type: 'ok', ms: 1400 }); },
   aiModel: async (el) => { await save('secret', 'secret-gemini', { ...AI.rec().data, model: el.value }); toast(`Modelo: ${el.value}`, { type: 'ok' }); },
   ciNote: async (el) => { const id = 'ci-' + el.dataset.sid; const c = live(id); if (c) await save('checkin', id, { ...c.data, painNote: el.value.trim() }); },
