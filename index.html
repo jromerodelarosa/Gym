@@ -485,7 +485,7 @@ input[type=range]{padding:0;min-height:0;height:34px;accent-color:var(--lime);ba
    4) Borrado lógico (deleted_at) → papelera
    5) Instantáneas diarias (local + nube) y export/import JSON
    ===================================================================== */
-const APP_VERSION = '2.1.1';
+const APP_VERSION = '2.2.0';
 const LIBS = {
   supabase: 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js',
   chart: 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'
@@ -2289,17 +2289,25 @@ const AI = {
     return (j.models || []).filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
       .map((m) => ({ id: m.name.replace(/^models\//, ''), label: m.displayName || m.name }));
   },
-  pickDefault(models) {
-    const ids = models.map((m) => m.id);
+  /** Modelos Flash ordenados del mejor al peor (el primero es el de por defecto). */
+  ranked(models) {
+    const ids = (models || []).map((m) => m.id);
     const bad = /lite|tts|image|audio|live|embed|thinking|8b|native|computer|robotics|learnlm|gemma|aqa|nano/i;
     const score = (id) => { const m = id.match(/^gemini-(\d+(?:\.\d+)?)-flash/); if (!m) return -1; let s = parseFloat(m[1]) * 100; if (/preview|exp/i.test(id)) s -= 50; if (/-\d{3}$/.test(id)) s -= 1; return s; };
     const c = ids.filter((id) => !bad.test(id) && score(id) >= 0).sort((a, b) => score(b) - score(a));
-    return c[0] || ids.find((id) => /flash/i.test(id) && !bad.test(id)) || ids.find((id) => /flash/i.test(id)) || ids[0];
+    const extra = ids.filter((id) => /flash/i.test(id) && !bad.test(id) && !c.includes(id));
+    return [...c, ...extra];
   },
-  thinkingFor(m) { if (/2\.5-flash(?!-lite)/.test(m)) return { thinkingBudget: 0 }; if (/^gemini-3/.test(m)) return { thinkingLevel: 'low' }; return null; },
+  pickDefault(models) { return this.ranked(models)[0] || (models[0] && models[0].id); },
+  thinkingFor(m) { if (/2\.5-flash(?!-lite)/.test(m)) return { thinkingBudget: 0 }; if (/^gemini-([3-9]|\d{2,})/.test(m)) return { thinkingLevel: 'minimal' }; return null; },
   err(status, j, model) {
     const m = (j && j.error && j.error.message) || '';
-    if (status === 429) return new AIError('quota', 'Has agotado la cuota gratuita de Gemini por ahora (por minuto o por día). Espera un rato o vuelve mañana. El motor de reglas y todo lo demás siguen funcionando.');
+    if (status === 429) {
+      const det = (j && j.error && j.error.details) || []; const rd = det.map((d) => d.retryDelay).find(Boolean);
+      const perDay = det.some((d) => (d.violations || []).some((v) => /PerDay/i.test(v.quotaId || '')));
+      const wait = perDay ? 'Vuelve mañana' : rd ? `Prueba de nuevo en ~${parseInt(rd, 10) || 60} s` : 'Espera un minuto';
+      return new AIError('quota', `Cuota gratuita de Gemini agotada ${perDay ? 'por hoy' : 'por este minuto'} en todos los modelos disponibles. ${wait}. El motor de reglas y todo lo demás siguen funcionando.`);
+    }
     if (status === 400 && /API key|API_KEY/i.test(m)) return new AIError('key', 'La API key no es válida. Revísala en Ajustes → Coach IA.');
     if (status === 403) return new AIError('key', 'La API key no tiene permiso para usar Gemini. Crea una nueva en Google AI Studio.');
     if (status === 404) return new AIError('model', `El modelo «${model}» ya no está disponible. Elige otro en Ajustes → Coach IA → Modelo.`);
@@ -2311,26 +2319,61 @@ const AI = {
       return await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.key() }, body: JSON.stringify(body) });
     } catch (e) { throw new AIError('net', 'No se pudo contactar con Gemini. ¿Hay conexión?'); }
   },
-  /** Una llamada: system + historial corto + mensaje. Con caché y contador. */
+  /** Una petición a un modelo concreto. Devuelve { res, j } (sin lanzar por errores HTTP). */
+  async request(model, body0) {
+    const body = clone(body0);
+    const think = this.thinkingFor(model); if (think) body.generationConfig.thinkingConfig = think;
+    let res = await this.post(model, body); let j = await res.json().catch(() => ({}));
+    // Algunos modelos no admiten ciertos ajustes: se relajan uno a uno (sin gastar peticiones válidas).
+    const msg = () => String((j.error && j.error.message) || '');
+    if (res.status === 400 && /thinking/i.test(msg()) && body.generationConfig.thinkingConfig) {
+      body.generationConfig.thinkingConfig = body.generationConfig.thinkingConfig.thinkingLevel === 'minimal' ? { thinkingLevel: 'low' } : undefined;
+      if (!body.generationConfig.thinkingConfig) delete body.generationConfig.thinkingConfig;
+      res = await this.post(model, body); j = await res.json().catch(() => ({}));
+      if (res.status === 400 && /thinking/i.test(msg())) { delete body.generationConfig.thinkingConfig; res = await this.post(model, body); j = await res.json().catch(() => ({})); }
+    }
+    if (res.status === 400 && /media|resolution/i.test(msg()) && body.generationConfig.mediaResolution) {
+      delete body.generationConfig.mediaResolution; res = await this.post(model, body); j = await res.json().catch(() => ({}));
+    }
+    return { res, j };
+  },
+  /** Una llamada: system + historial corto + mensaje. Con caché, contador y modelo de reserva. */
   async call({ parts, history = [], json = false, maxTokens = 700, cache = true }) {
     if (!this.key()) throw new AIError('nokey', 'Configura tu API key gratuita de Gemini en Ajustes → Coach IA.');
     if (!navigator.onLine) throw new AIError('offline', 'Sin conexión: el coach IA necesita internet. El motor de reglas sigue funcionando.');
-    const model = this.model();
+    const hasImg = parts.some((p) => p.inlineData);
     const body = { systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] }, contents: [...history, { role: 'user', parts }],
-      generationConfig: { temperature: 0.6, maxOutputTokens: maxTokens, ...(json ? { responseMimeType: 'application/json' } : {}) } };
-    const think = this.thinkingFor(model); if (think) body.generationConfig.thinkingConfig = think;
-    const h = hashStr(model + JSON.stringify(body));
+      generationConfig: { temperature: 0.6, maxOutputTokens: maxTokens, ...(json ? { responseMimeType: 'application/json' } : {}), ...(hasImg ? { mediaResolution: 'MEDIA_RESOLUTION_MEDIUM' } : {}) } };
+    const h = hashStr(JSON.stringify(body));
     if (cache) { const c = this.cacheGet(h); if (c) return { text: c, cached: true }; }
-    let res = await this.post(model, body);
-    if (res.status === 400 && body.generationConfig.thinkingConfig) { delete body.generationConfig.thinkingConfig; res = await this.post(model, body); }
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok) { const e = this.err(res.status, j, model); if (e.code === 'quota') await setMeta('aiQuotaAt', Date.now()); throw e; }
-    await this.count(j.usageMetadata && j.usageMetadata.totalTokenCount);
-    const cand = (j.candidates || [])[0];
-    const text = ((cand && cand.content && cand.content.parts) || []).map((p) => (p.thought ? '' : p.text || '')).join('').trim();
-    if (!text) throw new AIError('empty', cand && cand.finishReason === 'SAFETY' ? 'Respuesta bloqueada por los filtros de seguridad de Google.' : 'El modelo no devolvió texto. Prueba de nuevo.');
-    this.cacheSet(h, text);
-    return { text, cached: false };
+    // Modelo elegido + hasta 2 de reserva si está saturado (503) o retirado (404).
+    const primary = this.model();
+    const tries = [primary, ...this.ranked(S.meta.aiModels).filter((m) => m !== primary)].slice(0, 4);
+    let lastErr = null;
+    for (const model of tries) {
+      const { res, j } = await this.request(model, body);
+      if (!res.ok) {
+        const e = this.err(res.status, j, model); lastErr = e;
+        // Cuota (va por modelo), saturación o modelo retirado: probar el siguiente modelo.
+        if (res.status === 429 || res.status === 404 || res.status >= 500) continue;
+        throw e;
+      }
+      await this.count(j.usageMetadata && j.usageMetadata.totalTokenCount);
+      const cand = (j.candidates || [])[0];
+      const text = ((cand && cand.content && cand.content.parts) || []).map((p) => (p.thought ? '' : p.text || '')).join('').trim();
+      if (!text) {
+        const why = cand && cand.finishReason;
+        throw new AIError('empty', why === 'SAFETY' ? 'Respuesta bloqueada por los filtros de seguridad de Google.' : why === 'MAX_TOKENS' ? 'La respuesta se cortó por longitud. Prueba a preguntar algo más concreto.' : 'El modelo no devolvió texto. Prueba de nuevo.');
+      }
+      if (model !== primary) {
+        if (lastErr && lastErr.code === 'model') { await save('secret', 'secret-gemini', { ...this.rec().data, model }); toast(`El modelo ${primary} ya no está disponible: cambiado a ${model}`, { ms: 5000 }); }
+        else toast(`${primary} no disponible ahora (${lastErr && lastErr.code === 'quota' ? 'límite por minuto' : 'saturado'}); ha respondido ${model}`, { ms: 3500 });
+      }
+      this.cacheSet(h, text);
+      return { text, cached: false, model };
+    }
+    if (lastErr && lastErr.code === 'quota') await setMeta('aiQuotaAt', Date.now());
+    throw lastErr || new AIError('server', 'Gemini no responde ahora mismo. Inténtalo en unos minutos.');
   }
 };
 /** Resumen compacto que recibe la IA (nunca el historial completo). */
@@ -2737,14 +2780,16 @@ const ACT = {
   delMeasure: async (el) => { const id = el.dataset.id; if (!(await confirmDlg('¿Borrar medidas?', 'Podrás deshacerlo.', { ok: 'Borrar', danger: true }))) return; const prevs = await softDelete(id); App.render(); undoToast('Medidas borradas', prevs, [id]); },
   aiSaveKey: async (el) => {
     const key = $('#aiKey').value.trim();
-    if (!/^[A-Za-z0-9_\-]{20,}$/.test(key)) { toast('Esa API key no parece válida (copia la clave completa)', { type: 'err' }); return; }
+    if (!/^[A-Za-z0-9_.\-]{20,}$/.test(key)) { toast('Esa API key no parece válida (copia la clave completa, sin espacios)', { type: 'err' }); return; }
     el.disabled = true; el.textContent = 'Comprobando…';
     try {
       const models = await AI.listModels(key);
       if (!models.length) throw new Error('Esta clave no tiene modelos disponibles');
       await setMeta('aiModels', models); const model = AI.pickDefault(models);
       await save('secret', 'secret-gemini', { key, model, savedAt: Date.now() }, { deleted_at: null });
-      toast(`Clave guardada ✓ Modelo: ${model}`, { type: 'ok', ms: 5000 });
+      toast(`Clave guardada ✓ Modelo: ${model}. Comprobando…`, { type: 'ok', ms: 3000 });
+      try { const r = await AI.call({ parts: [{ text: 'Responde solo con: OK' }], maxTokens: 30, cache: false }); toast(`✓ Coach IA listo (${r.model || AI.model()})`, { type: 'ok', ms: 5000 }); }
+      catch (e) { toast(`Clave guardada, pero la prueba falló: ${e.message}`, { type: 'err', ms: 8000 }); }
     } catch (e) { toast(e.message, { type: 'err', ms: 7000 }); }
     App.render();
   },
